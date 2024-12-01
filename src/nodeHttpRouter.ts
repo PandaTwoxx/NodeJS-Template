@@ -42,6 +42,18 @@ interface TestResult {
   message?: string;
 }
 
+// Plugin definition
+interface Plugin {
+  name: string;
+  handler: (
+    req: http.IncomingMessage,
+    res: EnhancedServerResponse,
+    params?: Record<string, string>,
+    query?: Record<string, string | string[]>,
+    body?: Record<string, string>,
+  ) => Promise<boolean>; // Return false to halt the request
+}
+
 // Template rendering utility
 async function renderTemplate(
   templatePath: string,
@@ -93,28 +105,76 @@ async function parseBody(req: http.IncomingMessage): Promise<Record<string, stri
   });
 }
 
+function enhanceResponse(res: http.ServerResponse): EnhancedServerResponse {
+  const enhancedRes = res as EnhancedServerResponse;
+
+  enhancedRes.redirect = (url: string, statusCode: number = 302) => {
+    res.statusCode = statusCode;
+    res.setHeader("Location", url);
+    res.end();
+  };
+
+  enhancedRes.renderTemplate = async (templatePath, context = {}) => {
+    try {
+      const content = await renderTemplate(templatePath, context);
+      res.setHeader("Content-Type", "text/html");
+      res.end(content);
+    } catch (error) {
+      res.statusCode = 500;
+      res.end("Template rendering error");
+    }
+  };
+
+  return enhancedRes;
+}
+
+
 class Router {
   private routes: Route[] = [];
+  private globalPlugins: Plugin[] = [];
 
-  // Enhanced addRoute to support optional redirect
+  // Add a global plugin
+  addGlobalPlugin(plugin: Plugin) {
+    this.globalPlugins.push(plugin);
+  }
+
+  // Enhanced addRoute with support for custom plugins
   addRoute(
     method: string,
     path: string,
     handler: RouteHandler,
-    redirectTo?: string,
+    customPlugins: Plugin[] = [], // Add custom plugins per route
+    redirectTo?: string, // Optional redirection
   ) {
     const wrappedHandler: RouteHandler = async (req, res, params, query, body) => {
-      await handler(req, res, params, query, body);
-
+      const enhancedRes = enhanceResponse(res);
+  
+      // Run global plugins
+      for (const plugin of this.globalPlugins) {
+        const shouldContinue = await plugin.handler(req, enhancedRes, params, query, body);
+        if (!shouldContinue) return; // Stop the request if a plugin halts
+      }
+  
+      // Run custom plugins
+      for (const plugin of customPlugins) {
+        const shouldContinue = await plugin.handler(req, enhancedRes, params, query, body);
+        if (!shouldContinue) return; // Stop the request if a plugin halts
+      }
+  
+      // Execute the actual route handler
+      await handler(req, enhancedRes, params, query, body);
+  
+      // Optional redirection after handling
       if (redirectTo) {
-        (res as EnhancedServerResponse).redirect(redirectTo);
+        enhancedRes.redirect(redirectTo);
       }
     };
-
+  
     this.routes.push({ method, path, handler: wrappedHandler });
   }
+  
 
-  // Match route with dynamic parameter support (unchanged)
+  // Match route (unchanged from your original code)
   matchRoute(method: string, url: string) {
     for (const route of this.routes) {
       const paramNames: string[] = [];
@@ -136,6 +196,27 @@ class Router {
     }
     return null;
   }
+
+  handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+    const enhancedRes = enhanceResponse(res);
+    const url = new URL(req.url || "", `http://${req.headers.host}`);
+    const match = this.matchRoute(req.method || "", url.pathname);
+  
+    if (match) {
+      const query = Object.fromEntries(url.searchParams.entries());
+      parseBody(req)
+        .then((body) => match.handler(req, enhancedRes, match.params, query, body))
+        .catch((error) => {
+          enhancedRes.statusCode = 500;
+          enhancedRes.end("Internal Server Error");
+          console.error("Request handling error:", error);
+        });
+    } else {
+      enhancedRes.statusCode = 404;
+      enhancedRes.end("Not Found");
+    }
+  }  
+  
 
   /**
    * Run a comprehensive test suite for route matching
@@ -221,154 +302,61 @@ class Router {
       failed: failedCount,
     };
   }
+
+  /**
+   * Returns an HTTP server configured with the router.
+   * @returns {http.Server} The configured HTTP server.
+   */
+  createServer(): http.Server {
+    return http.createServer(async (req, res) => {
+      const enhancedRes = res as EnhancedServerResponse;
+
+      // Add the `redirect` method to the response
+      enhancedRes.redirect = (url: string, statusCode: number = 302) => {
+        enhancedRes.writeHead(statusCode, { Location: url });
+        enhancedRes.end();
+      };
+
+      // Add the `renderTemplate` method to the response
+      enhancedRes.renderTemplate = async (templatePath: string, context?: Record<string, any>) => {
+        try {
+          const content = await renderTemplate(templatePath, context || {});
+          enhancedRes.writeHead(200, { "Content-Type": "text/html" });
+          enhancedRes.end(content);
+        } catch (error) {
+          enhancedRes.writeHead(500, { "Content-Type": "text/plain" });
+          enhancedRes.end("Internal Server Error");
+        }
+      };
+
+      // Extract URL and method
+      const method = req.method || "GET";
+      const url = req.url || "/";
+
+      // Parse query parameters
+      const parsedUrl = new URL(url, `http://${req.headers.host}`);
+      const query = Object.fromEntries(parsedUrl.searchParams.entries());
+
+      // Match a route
+      const matchedRoute = this.matchRoute(method, parsedUrl.pathname);
+
+      if (matchedRoute) {
+        const body = await parseBody(req);
+        try {
+          await matchedRoute.handler(req, enhancedRes, matchedRoute.params, query, body);
+        } catch (error) {
+          console.error("Handler error:", error);
+          enhancedRes.writeHead(500, { "Content-Type": "text/plain" });
+          enhancedRes.end("Internal Server Error");
+        }
+      } else {
+        enhancedRes.writeHead(404, { "Content-Type": "text/plain" });
+        enhancedRes.end("Not Found");
+      }
+    });
+  }
 }
 
-// Create server with routing
-const createServer = () => {
-  const router = new Router();
-
-  // Existing route setup (unchanged)
-  router.addRoute("GET", "/", async (req, res) => {
-    const renderedHtml = await renderTemplate("home.html", {
-      title: "Home Page",
-      links: [
-        { href: "/users", text: "Users" },
-        { href: "/posts", text: "Posts" },
-        { href: "/users/create", text: "Create User" },
-      ],
-    });
-
-    res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(renderedHtml);
-  });
-
-  // Users route with template rendering
-  router.addRoute("GET", "/users", async (req, res, params, query) => {
-    const renderedHtml = await renderTemplate("users/list.html", {
-      users: [
-        { id: 1, name: "User 1" },
-        { id: 2, name: "User 2" },
-      ],
-      message: query?.message,
-    });
-
-    res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(renderedHtml);
-  });
-
-  // Create user form route with template rendering
-  router.addRoute("GET", "/users/create", async (req, res) => {
-    const renderedHtml = await renderTemplate("users/create.html");
-
-    res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(renderedHtml);
-  });
-
-  // Create user POST route with template rendering
-  router.addRoute("POST", "/users/create", async (req, res, params, query, body) => {
-    console.log("Creating user:", body);
-
-    const renderedHtml = await renderTemplate("users/created.html", {
-      username: body?.username,
-      email: body?.email,
-    });
-
-    res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(renderedHtml);
-  }, "/users?message=User%20Created%20Successfully");
-
-  // User detail route with template rendering
-  router.addRoute("GET", "/users/:id", async (req, res, params, query) => {
-    const renderedHtml = await renderTemplate("users/detail.html", {
-      userId: params?.id,
-      message: query?.message,
-    });
-
-    res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(renderedHtml);
-  });
-
-  // 404 Not Found handler with template rendering
-  const notFoundHandler: RouteHandler = async (req, res) => {
-    const renderedHtml = await renderTemplate("404.html");
-
-    res.writeHead(404, { "Content-Type": "text/html" });
-    res.end(renderedHtml);
-  };
-
-  // Create HTTP server
-  const server = http.createServer(async (req, res) => {
-    // Extend response with redirect and renderTemplate methods
-    (res as EnhancedServerResponse).redirect = (url: string, statusCode = 302) => {
-      res.writeHead(statusCode, { "Location": url });
-      res.end();
-    };
-
-    (res as EnhancedServerResponse).renderTemplate = async (templatePath, context) => {
-      const renderedHtml = await renderTemplate(templatePath, context);
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(renderedHtml);
-    };
-
-    const parsedUrl = new URL(req.url || "/", `http://${req.headers.host}`);
-
-    // Parse query parameters
-    const query = Object.fromEntries(parsedUrl.searchParams);
-
-    // Parse body for POST requests
-    let body = {};
-    if (["POST", "PUT", "PATCH"].includes(req.method || "")) {
-      try {
-        body = await parseBody(req);
-      } catch (error) {
-        console.error("Body parsing error:", error);
-      }
-    }
-
-    const routeMatch = router.matchRoute(req.method || "GET", parsedUrl.pathname);
-
-    if (routeMatch) {
-      routeMatch.handler(req, res, routeMatch.params, query, body);
-    } else {
-      notFoundHandler(req, res);
-    }
-  });
-
-  // Demonstration of test running
-  const testCases: TestCase[] = [
-    {
-      name: "Match User List Route",
-      method: "GET",
-      path: "/users",
-      expectedMatch: true,
-    },
-    {
-      name: "Match User Create Route",
-      method: "GET",
-      path: "/users/create",
-      expectedMatch: true,
-    },
-    {
-      name: "Match User Detail Route",
-      method: "GET",
-      path: "/users/123",
-      expectedMatch: true,
-      expectedParams: { id: "123" },
-    },
-    {
-      name: "Reject Invalid Route",
-      method: "GET",
-      path: "/nonexistent",
-      expectedMatch: false,
-    },
-  ];
-
-  // Run tests automatically when server is created
-  const testResults = router.runTests(testCases);
-  router.printTestResults(testResults);
-
-  return server;
-};
 
 // Export server creation function
-export default createServer;
+export { Router, renderTemplate, enhanceResponse, parseBody, Plugin} ;
