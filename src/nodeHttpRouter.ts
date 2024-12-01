@@ -41,8 +41,7 @@ interface TestResult {
   passed: boolean;
   message?: string;
 }
-
-// Plugin definition
+// Updated Plugin interface
 interface Plugin {
   name: string;
   handler: (
@@ -50,8 +49,8 @@ interface Plugin {
     res: EnhancedServerResponse,
     params?: Record<string, string>,
     query?: Record<string, string | string[]>,
-    body?: Record<string, string>,
-  ) => Promise<boolean>; // Return false to halt the request
+    body?: Record<string, string>
+  ) => Promise<RouteHandler | true | false>; // Return new handler, true (to proceed), or false (to halt)
 }
 
 // Template rendering utility
@@ -138,41 +137,44 @@ class Router {
     this.globalPlugins.push(plugin);
   }
 
-  // Enhanced addRoute with support for custom plugins
+  // Enhanced addRoute with support for custom plugins and handler override
   addRoute(
     method: string,
     path: string,
     handler: RouteHandler,
     customPlugins: Plugin[] = [], // Add custom plugins per route
-    redirectTo?: string, // Optional redirection
+    redirectTo?: string
   ) {
     const wrappedHandler: RouteHandler = async (req, res, params, query, body) => {
-      const enhancedRes = enhanceResponse(res);
-  
+      const enhancedRes = res as EnhancedServerResponse;
+
       // Run global plugins
       for (const plugin of this.globalPlugins) {
-        const shouldContinue = await plugin.handler(req, enhancedRes, params, query, body);
-        if (!shouldContinue) return; // Stop the request if a plugin halts
+        const result = await plugin.handler(req, enhancedRes, params, query, body);
+
+        if (result === false) return; // Halt the request if the plugin returns false
+        if (result !== true) handler = result; // Override handler if plugin provides a new one
       }
-  
+
       // Run custom plugins
       for (const plugin of customPlugins) {
-        const shouldContinue = await plugin.handler(req, enhancedRes, params, query, body);
-        if (!shouldContinue) return; // Stop the request if a plugin halts
+        const result = await plugin.handler(req, enhancedRes, params, query, body);
+
+        if (result === false) return; // Halt the request if the plugin returns false
+        if (result !== true) handler = result; // Override handler if plugin provides a new one
       }
-  
-      // Execute the actual route handler
+
+      // Run the final (possibly overridden) route handler
       await handler(req, enhancedRes, params, query, body);
-  
-      // Optional redirection after handling
+
+      // Optional redirection
       if (redirectTo) {
         enhancedRes.redirect(redirectTo);
       }
     };
-  
+
     this.routes.push({ method, path, handler: wrappedHandler });
   }
-  
 
   // Match route (unchanged from your original code)
   matchRoute(method: string, url: string) {
@@ -197,6 +199,7 @@ class Router {
     return null;
   }
 
+
   handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     const enhancedRes = enhanceResponse(res);
     const url = new URL(req.url || "", `http://${req.headers.host}`);
@@ -216,8 +219,8 @@ class Router {
       enhancedRes.end("Not Found");
     }
   }  
-  
 
+  
   /**
    * Run a comprehensive test suite for route matching
    * @param testCases Array of test cases to run
@@ -359,4 +362,4 @@ class Router {
 
 
 // Export server creation function
-export { Router, renderTemplate, enhanceResponse, parseBody, Plugin} ;
+export { Router, renderTemplate, enhanceResponse, parseBody, Plugin, RouteHandler };

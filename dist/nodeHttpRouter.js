@@ -76,26 +76,30 @@ class Router {
     addGlobalPlugin(plugin) {
         this.globalPlugins.push(plugin);
     }
-    // Enhanced addRoute with support for custom plugins
+    // Enhanced addRoute with support for custom plugins and handler override
     addRoute(method, path, handler, customPlugins = [], // Add custom plugins per route
     redirectTo) {
         const wrappedHandler = async (req, res, params, query, body) => {
-            const enhancedRes = enhanceResponse(res);
+            const enhancedRes = res;
             // Run global plugins
             for (const plugin of this.globalPlugins) {
-                const shouldContinue = await plugin.handler(req, enhancedRes, params, query, body);
-                if (!shouldContinue)
-                    return; // Stop the request if a plugin halts
+                const result = await plugin.handler(req, enhancedRes, params, query, body);
+                if (result === false)
+                    return; // Halt the request if the plugin returns false
+                if (result !== true)
+                    handler = result; // Override handler if plugin provides a new one
             }
             // Run custom plugins
             for (const plugin of customPlugins) {
-                const shouldContinue = await plugin.handler(req, enhancedRes, params, query, body);
-                if (!shouldContinue)
-                    return; // Stop the request if a plugin halts
+                const result = await plugin.handler(req, enhancedRes, params, query, body);
+                if (result === false)
+                    return; // Halt the request if the plugin returns false
+                if (result !== true)
+                    handler = result; // Override handler if plugin provides a new one
             }
-            // Execute the actual route handler
+            // Run the final (possibly overridden) route handler
             await handler(req, enhancedRes, params, query, body);
-            // Optional redirection after handling
+            // Optional redirection
             if (redirectTo) {
                 enhancedRes.redirect(redirectTo);
             }
