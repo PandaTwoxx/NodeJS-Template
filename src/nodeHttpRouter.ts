@@ -108,25 +108,23 @@ function enhanceResponse(res: http.ServerResponse): EnhancedServerResponse {
   const enhancedRes = res as EnhancedServerResponse;
 
   enhancedRes.redirect = (url: string, statusCode: number = 302) => {
-    res.statusCode = statusCode;
-    res.setHeader("Location", url);
-    res.end();
+    enhancedRes.writeHead(statusCode, { Location: url });
+    enhancedRes.end();
   };
 
   enhancedRes.renderTemplate = async (templatePath, context = {}) => {
     try {
       const content = await renderTemplate(templatePath, context);
-      res.setHeader("Content-Type", "text/html");
-      res.end(content);
+      enhancedRes.setHeader("Content-Type", "text/html");
+      enhancedRes.end(content);
     } catch (error) {
-      res.statusCode = 500;
-      res.end("Template rendering error");
+      enhancedRes.statusCode = 500;
+      enhancedRes.end("Template rendering error");
     }
   };
 
   return enhancedRes;
 }
-
 
 class Router {
   private routes: Route[] = [];
@@ -312,48 +310,22 @@ class Router {
    */
   createServer(): http.Server {
     return http.createServer(async (req, res) => {
-      const enhancedRes = res as EnhancedServerResponse;
+      const enhancedRes = enhanceResponse(res); // Enhance the response object
+      const url = new URL(req.url || "", `http://${req.headers.host}`);
+      const match = this.matchRoute(req.method || "", url.pathname);
 
-      // Add the `redirect` method to the response
-      enhancedRes.redirect = (url: string, statusCode: number = 302) => {
-        enhancedRes.writeHead(statusCode, { Location: url });
-        enhancedRes.end();
-      };
-
-      // Add the `renderTemplate` method to the response
-      enhancedRes.renderTemplate = async (templatePath: string, context?: Record<string, any>) => {
+      if (match) {
+        const query = Object.fromEntries(url.searchParams.entries());
         try {
-          const content = await renderTemplate(templatePath, context || {});
-          enhancedRes.writeHead(200, { "Content-Type": "text/html" });
-          enhancedRes.end(content);
-        } catch (error) {
-          enhancedRes.writeHead(500, { "Content-Type": "text/plain" });
-          enhancedRes.end("Internal Server Error");
-        }
-      };
-
-      // Extract URL and method
-      const method = req.method || "GET";
-      const url = req.url || "/";
-
-      // Parse query parameters
-      const parsedUrl = new URL(url, `http://${req.headers.host}`);
-      const query = Object.fromEntries(parsedUrl.searchParams.entries());
-
-      // Match a route
-      const matchedRoute = this.matchRoute(method, parsedUrl.pathname);
-
-      if (matchedRoute) {
-        const body = await parseBody(req);
-        try {
-          await matchedRoute.handler(req, enhancedRes, matchedRoute.params, query, body);
+          const body = await parseBody(req);
+          await match.handler(req, enhancedRes, match.params, query, body);
         } catch (error) {
           console.error("Handler error:", error);
-          enhancedRes.writeHead(500, { "Content-Type": "text/plain" });
+          enhancedRes.statusCode = 500;
           enhancedRes.end("Internal Server Error");
         }
       } else {
-        enhancedRes.writeHead(404, { "Content-Type": "text/plain" });
+        enhancedRes.statusCode = 404;
         enhancedRes.end("Not Found");
       }
     });
@@ -362,4 +334,4 @@ class Router {
 
 
 // Export server creation function
-export { Router, renderTemplate, enhanceResponse, parseBody, Plugin, RouteHandler };
+export { Router, renderTemplate, enhanceResponse, parseBody, Plugin, RouteHandler, EnhancedServerResponse };
