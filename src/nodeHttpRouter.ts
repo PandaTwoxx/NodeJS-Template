@@ -15,7 +15,7 @@ type RouteHandler = (
 
 // Route definition interface
 interface Route {
-  method: string;
+  methods: string[]; // Changed from string to string[]
   path: string;
   handler: RouteHandler;
 }
@@ -66,9 +66,7 @@ async function renderTemplate(
     // Use Function constructor for safe template interpolation
     const templateFunction = new Function(
       ...Object.keys(context),
-      `
-      return \`${template}\`;
-    `,
+      `return \`${template}\`;`
     );
 
     // Apply context values to template
@@ -137,12 +135,13 @@ class Router {
 
   // Enhanced addRoute with support for custom plugins and handler override
   addRoute(
-    method: string,
+    methods: string | string[], // Accept single method or array of methods
     path: string,
     handler: RouteHandler,
     customPlugins: Plugin[] = [], // Add custom plugins per route
     redirectTo?: string
   ) {
+    const normalizedMethods = Array.isArray(methods) ? methods.map(m => m.toUpperCase()) : [methods.toUpperCase()];
     const wrappedHandler: RouteHandler = async (req, res, params, query, body) => {
       const enhancedRes = res as EnhancedServerResponse;
 
@@ -171,11 +170,12 @@ class Router {
       }
     };
 
-    this.routes.push({ method, path, handler: wrappedHandler });
+    this.routes.push({ methods: normalizedMethods, path, handler: wrappedHandler });
   }
 
   // Match route (unchanged from your original code)
   matchRoute(method: string, url: string) {
+    const normalizedMethod = method.toUpperCase();
     for (const route of this.routes) {
       const paramNames: string[] = [];
       const regexPath = route.path.replace(/:[^\s/]+/g, (match) => {
@@ -186,7 +186,7 @@ class Router {
       const regex = new RegExp(`^${regexPath}$`);
       const match = url.match(regex);
 
-      if (match && route.method === method) {
+      if (match && route.methods.includes(normalizedMethod)) { // Check if method is in the allowed methods
         const params: Record<string, string> = {};
         paramNames.forEach((name, index) => {
           params[name] = match[index + 1];
@@ -197,12 +197,11 @@ class Router {
     return null;
   }
 
-
   handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     const enhancedRes = enhanceResponse(res);
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const match = this.matchRoute(req.method || "", url.pathname);
-  
+
     if (match) {
       const query = Object.fromEntries(url.searchParams.entries());
       parseBody(req)
@@ -216,9 +215,8 @@ class Router {
       enhancedRes.statusCode = 404;
       enhancedRes.end("Not Found");
     }
-  }  
+  }
 
-  
   /**
    * Run a comprehensive test suite for route matching
    * @param testCases Array of test cases to run
@@ -331,7 +329,6 @@ class Router {
     });
   }
 }
-
 
 // Export server creation function
 export { Router, renderTemplate, enhanceResponse, parseBody, Plugin, RouteHandler, EnhancedServerResponse };
