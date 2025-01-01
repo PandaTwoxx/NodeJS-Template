@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import * as http from "node:http";
 import { join } from "node:path";
 import { parse as parseQueryString } from "node:querystring";
@@ -59,14 +60,20 @@ interface Plugin {
  * Reads the contents of a file at the given path.
  *
  * @param filePath - The path to the file to read.
- * @returns The contents of the file as a string.
- * @throws An error if the file cannot be read.
+ * @returns The contents of the file as a string, or undefined if the file does not exist.
  */
-function pullFile(filePath: string): string {
+function pullFile(filePath: string): string | undefined {
+  const absolutePath = resolve(__dirname, filePath); 
+
+  if (!existsSync(absolutePath)) {
+    return undefined; 
+  }
+
   try {
-    return readFileSync(filePath, 'utf-8');
+    return readFileSync(absolutePath, 'utf-8');
   } catch (error) {
-    throw new Error(`Failed to read file at ${filePath}: ${error}`);
+    console.error(`Failed to read file at ${absolutePath}: ${error}`);
+    return undefined; 
   }
 }
 
