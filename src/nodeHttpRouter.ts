@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { readFileSync } from 'node:fs';
 import * as http from "node:http";
 import { join } from "node:path";
 import { parse as parseQueryString } from "node:querystring";
@@ -52,6 +53,23 @@ interface Plugin {
     body?: Record<string, string>
   ) => Promise<RouteHandler | true | false>; // Return new handler, true (to proceed), or false (to halt)
 }
+
+
+/**
+ * Reads the contents of a file at the given path.
+ *
+ * @param filePath - The path to the file to read.
+ * @returns The contents of the file as a string.
+ * @throws An error if the file cannot be read.
+ */
+function pullFile(filePath: string): string {
+  try {
+    return readFileSync(filePath, 'utf-8');
+  } catch (error) {
+    throw new Error(`Failed to read file at ${filePath}: ${error}`);
+  }
+}
+
 
 // Template rendering utility
 async function renderTemplate(
@@ -331,4 +349,4 @@ class Router {
 }
 
 // Export server creation function
-export { Router, renderTemplate, enhanceResponse, parseBody, Plugin, RouteHandler, EnhancedServerResponse };
+export { Router, renderTemplate, pullFile, enhanceResponse, parseBody, Plugin, RouteHandler, EnhancedServerResponse };
