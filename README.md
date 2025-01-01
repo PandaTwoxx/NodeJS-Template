@@ -250,7 +250,7 @@ router.addRoute('GET', '/users/:id', (req, res, params) => {
 });
 ```
 Handling Different HTTP Methods
-```
+```typescript
 router.addRoute(['GET', 'POST'], '/items', (req, res) => {
   if (req.method === 'GET') {
     res.end('List of items');
