@@ -1,4 +1,4 @@
-# Enhanced Router Documentation
+# Router Documentation
 
 This document provides detailed information about the `Router` class and its associated utilities, designed for building robust and flexible web applications in Node.js.
 
@@ -241,16 +241,16 @@ const server = router.createServer();
 server.listen(3000, () => {
   console.log('Server listening on port 3000');
 });
-Use code with caution.
-Markdown
+```
 Route Parameters
+```typescript
 router.addRoute('GET', '/users/:id', (req, res, params) => {
   const userId = params?.id;
   res.end(`Viewing user with ID: ${userId}`);
 });
-Use code with caution.
-TypeScript
+```
 Handling Different HTTP Methods
+```typescript
 router.addRoute(['GET', 'POST'], '/items', (req, res) => {
   if (req.method === 'GET') {
     res.end('List of items');
@@ -260,9 +260,9 @@ router.addRoute(['GET', 'POST'], '/items', (req, res) => {
     res.end('Item created');
   }
 });
-Use code with caution.
-TypeScript
+```
 Using Plugins (Middleware)
+```TypeScript
 const loggerPlugin: Plugin = {
   name: 'logger',
   handler: async (req, res) => {
@@ -277,9 +277,9 @@ router.addRoute('GET', '/data', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify({ message: 'Data endpoint' }));
 });
-Use code with caution.
-TypeScript
+```
 Running Tests
+```TypeScript
 const testCases: TestCase[] = [
   { name: 'Home page GET', method: 'GET', path: '/', expectedMatch: true },
   { name: 'About page GET', method: 'GET', path: '/about', expectedMatch: true },
@@ -289,3 +289,4 @@ const testCases: TestCase[] = [
 
 const results = router.runTests(testCases);
 router.printTestResults(results);
+```
