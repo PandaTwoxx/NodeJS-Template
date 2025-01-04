@@ -1,4 +1,4 @@
-# Router Documentation
+# Enhanced Router Documentation
 
 This document provides detailed information about the `Router` class and its associated utilities, designed for building robust and flexible web applications in Node.js.
 
@@ -12,6 +12,7 @@ The `Router` class provides a mechanism for defining and handling HTTP routes. I
 *   **Request body parsing:**  Supports parsing `application/x-www-form-urlencoded` and `application/json` request bodies.
 *   **Customizable responses:**  Provides utilities for redirection and template rendering.
 *   **Middleware support (Plugins):**  Allows attaching pre- and post-processing logic to routes.
+*   **Serving static directories:**  Easily serve entire directories of static files.
 *   **Comprehensive testing:**  Includes a built-in testing framework for route matching.
 
 ## Core Components
@@ -100,6 +101,9 @@ The `Router` class provides a mechanism for defining and handling HTTP routes. I
 *   **`enhanceResponse(res: http.ServerResponse): EnhancedServerResponse`**:
     Extends the standard `http.ServerResponse` object with the `redirect` and `renderTemplate` methods.
 
+*   **`pullFile(filePath: string): string | undefined`**:
+    Reads the contents of a file at the given path. Returns the file content as a string or `undefined` if the file does not exist or cannot be read.
+
 ## `Router` Class
 
 The core of the routing functionality.
@@ -152,6 +156,21 @@ The `Router` class has a default constructor and does not require any arguments 
     router.addRoute('GET', '/items/:id', (req, res, params) => {
       res.end(`Viewing item with ID: ${params?.id}`);
     });
+    ```
+
+*   **`addDirectory(directoryPath: string): void`**:
+    Adds routes to serve static files from the specified directory. This method automatically creates routes for all files within the directory (and its subdirectories), mapping the directory structure to URL paths.
+
+    *   `directoryPath`: The path to the directory you want to serve. This path is resolved relative to the location of your script.
+
+    ```typescript
+    // Serve files from the 'public' directory
+    router.addDirectory('public');
+
+    // Now, files in the 'public' directory can be accessed like:
+    // - http://localhost:3000/public/image.png
+    // - http://localhost:3000/public/css/style.css
+    // - http://localhost:3000/public/js/script.js
     ```
 
 *   **`matchRoute(method: string, url: string): { handler: RouteHandler; params: Record<string, string>; } | null`**:
@@ -242,14 +261,18 @@ server.listen(3000, () => {
   console.log('Server listening on port 3000');
 });
 ```
-Route Parameters
+
+### Route Parameters
+
 ```typescript
 router.addRoute('GET', '/users/:id', (req, res, params) => {
   const userId = params?.id;
   res.end(`Viewing user with ID: ${userId}`);
 });
 ```
-Handling Different HTTP Methods
+
+### Handling Different HTTP Methods
+
 ```typescript
 router.addRoute(['GET', 'POST'], '/items', (req, res) => {
   if (req.method === 'GET') {
@@ -261,8 +284,10 @@ router.addRoute(['GET', 'POST'], '/items', (req, res) => {
   }
 });
 ```
-Using Plugins (Middleware)
-```TypeScript
+
+### Using Plugins (Middleware)
+
+```typescript
 const loggerPlugin: Plugin = {
   name: 'logger',
   handler: async (req, res) => {
@@ -278,8 +303,44 @@ router.addRoute('GET', '/data', (req, res) => {
   res.end(JSON.stringify({ message: 'Data endpoint' }));
 });
 ```
-Running Tests
-```TypeScript
+
+### Serving Static Directories
+
+Before using `addDirectory`, ensure you have installed the `mime-types` package:
+
+```bash
+npm install mime-types
+# or
+yarn add mime-types
+```
+
+Then you can use the `addDirectory` method:
+
+```typescript
+import * as http from 'node:http';
+import { Router } from './your-router-file'; // Adjust path
+
+const router = new Router();
+
+// Serve static files from the 'public' directory
+router.addDirectory('public');
+
+// Define other routes
+router.addRoute('GET', '/', (req, res) => {
+  res.end('Welcome!');
+});
+
+const server = router.createServer();
+server.listen(3000, () => {
+  console.log('Server listening on port 3000');
+});
+```
+
+Create a `public` directory in the root of your project and place some files in it (e.g., `index.html`, `style.css`, `images/logo.png`). These files will be automatically served when accessed through `/public/index.html`, `/public/style.css`, and `/public/images/logo.png` respectively.
+
+### Running Tests
+
+```typescript
 const testCases: TestCase[] = [
   { name: 'Home page GET', method: 'GET', path: '/', expectedMatch: true },
   { name: 'About page GET', method: 'GET', path: '/about', expectedMatch: true },
