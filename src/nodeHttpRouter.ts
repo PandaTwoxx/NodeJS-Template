@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import * as http from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parse as parseQueryString } from "node:querystring";
 import { URL } from "node:url";
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { lookup as mimeLookup } from 'mime-types';
 
 // Enhanced route handler type definition
 type RouteHandler = (
@@ -17,7 +17,7 @@ type RouteHandler = (
 
 // Route definition interface
 interface Route {
-  methods: string[]; // Changed from string to string[]
+  methods: string[];
   path: string;
   handler: RouteHandler;
 }
@@ -54,29 +54,6 @@ interface Plugin {
     body?: Record<string, string>
   ) => Promise<RouteHandler | true | false>; // Return new handler, true (to proceed), or false (to halt)
 }
-
-
-/**
- * Reads the contents of a file at the given path.
- *
- * @param filePath - The path to the file to read.
- * @returns The contents of the file as a string, or undefined if the file does not exist.
- */
-function pullFile(filePath: string): string | undefined {
-  const absolutePath = resolve(__dirname, filePath); 
-
-  if (!existsSync(absolutePath)) {
-    return undefined; 
-  }
-
-  try {
-    return readFileSync(absolutePath, 'utf-8');
-  } catch (error) {
-    console.error(`Failed to read file at ${absolutePath}: ${error}`);
-    return undefined; 
-  }
-}
-
 
 // Template rendering utility
 async function renderTemplate(
@@ -149,6 +126,27 @@ function enhanceResponse(res: http.ServerResponse): EnhancedServerResponse {
   return enhancedRes;
 }
 
+/**
+ * Reads the contents of a file at the given path.
+ *
+ * @param filePath - The path to the file to read.
+ * @returns The contents of the file as a string, or undefined if the file does not exist.
+ */
+function pullFile(filePath: string): string | undefined {
+  const absolutePath = resolve(__dirname, filePath);
+
+  if (!existsSync(absolutePath)) {
+    return undefined;
+  }
+
+  try {
+    return readFileSync(absolutePath, 'utf-8');
+  } catch (error) {
+    console.error(`Failed to read file at ${absolutePath}: ${error}`);
+    return undefined;
+  }
+}
+
 class Router {
   private routes: Route[] = [];
   private globalPlugins: Plugin[] = [];
@@ -196,6 +194,49 @@ class Router {
     };
 
     this.routes.push({ methods: normalizedMethods, path, handler: wrappedHandler });
+  }
+
+  /**
+   * Adds routes for serving static files from a directory.
+   *
+   * @param directoryPath - The path to the directory to serve.
+   */
+  addDirectory(directoryPath: string) {
+    const absoluteDirPath = resolve(__dirname, directoryPath);
+
+    if (!existsSync(absoluteDirPath) || !statSync(absoluteDirPath).isDirectory()) {
+      console.error(`Error: Directory not found at ${absoluteDirPath}`);
+      return;
+    }
+
+    const traverseDirectory = (currentPath: string, routePrefix: string) => {
+      const files = readdirSync(currentPath);
+
+      for (const file of files) {
+        const absoluteFilePath = join(currentPath, file);
+        const relativePath = absoluteFilePath.substring(absoluteDirPath.length);
+        const routePath = join(routePrefix, relativePath).replace(/\\/g, '/'); // Normalize path for URLs
+
+        if (statSync(absoluteFilePath).isDirectory()) {
+          traverseDirectory(absoluteFilePath, routePrefix);
+        } else {
+          this.addRoute('GET', routePath, (req, res) => {
+            const enhancedRes = res as EnhancedServerResponse;
+            const contentType = mimeLookup(file) || 'application/octet-stream';
+
+            if (pullFile(join(directoryPath, relativePath))) {
+              enhancedRes.setHeader('Content-Type', contentType);
+              enhancedRes.end(pullFile(join(directoryPath, relativePath)));
+            } else {
+              enhancedRes.statusCode = 404;
+              enhancedRes.end('Not Found');
+            }
+          });
+        }
+      }
+    };
+
+    traverseDirectory(absoluteDirPath, `/${directoryPath}`);
   }
 
   // Match route (unchanged from your original code)
@@ -356,4 +397,4 @@ class Router {
 }
 
 // Export server creation function
-export { Router, renderTemplate, pullFile, enhanceResponse, parseBody, Plugin, RouteHandler, EnhancedServerResponse };
+export { Router, renderTemplate, enhanceResponse, parseBody, Plugin, RouteHandler, EnhancedServerResponse };
