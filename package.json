@@ -24,6 +24,7 @@
   "homepage": "https://github.com/PandaTwoxx/NodeJS-Template#readme",
   "dependencies": {
     "cookie-parser": "^1.4.7",
+    "mime-types": "^2.1.35",
     "typescript": "^5.7.2"
   },
   "devDependencies": {
