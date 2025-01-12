@@ -1,10 +1,10 @@
-import { enhanceResponse, renderTemplate } from './nodeHttpRouter';
+import { enhanceResponse, renderTemplate } from './nodeHttpRouter.js';
 import { watch } from 'fs';
 const createLiveReloadPlugin = (options) => {
     return {
         name: 'liveReload',
         handler: async (req, res, params, query, body) => {
-            if (req.method === 'GET' && req.url === '/live-reload-template') {
+            if (req.method === 'GET' && req.url === options.templatePage) {
                 const enhancedRes = enhanceResponse(res);
                 res.setHeader('Content-Type', 'text/event-stream');
                 res.setHeader('Cache-Control', 'no-cache');
@@ -12,7 +12,7 @@ const createLiveReloadPlugin = (options) => {
                 res.flushHeaders();
                 const sendUpdate = async () => {
                     try {
-                        const content = await renderTemplate(options.templatePath, { message: 'Template updated!' });
+                        const content = await renderTemplate(options.templatePath, options.templateData);
                         res.write(`data: ${JSON.stringify({ html: content })}\n\n`);
                     }
                     catch (error) {

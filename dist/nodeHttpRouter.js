@@ -1,10 +1,12 @@
 import { readFile } from "node:fs/promises";
 import * as http from "node:http";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname } from "node:path";
 import { parse as parseQueryString } from "node:querystring";
-import { URL } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { lookup as mimeLookup } from 'mime-types';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 // Template rendering utility
 async function renderTemplate(templatePath, context = {}) {
     try {
