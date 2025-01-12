@@ -3,13 +3,16 @@ import { watch } from 'fs';
 
 interface LiveReloadPluginOptions {
     templatePath: string;
+    templateData?: Record<string, any>; 
+    templatePage: string;
+    pluginName: string;
 }
   
 const createLiveReloadPlugin = (options: LiveReloadPluginOptions): Plugin => {
     return {
-        name: 'liveReload',
+        name: options.pluginName,
         handler: async (req, res, params, query, body) => {
-        if (req.method === 'GET' && req.url === '/live-reload-template') {
+        if (req.method === 'GET' && req.url === options.templatePage) {
             const enhancedRes = enhanceResponse(res);
 
             res.setHeader('Content-Type', 'text/event-stream');
@@ -19,7 +22,7 @@ const createLiveReloadPlugin = (options: LiveReloadPluginOptions): Plugin => {
 
             const sendUpdate = async () => {
             try {
-                const content = await renderTemplate(options.templatePath, { message: 'Template updated!' });
+                const content = await renderTemplate(options.templatePath, options.templateData);
                 res.write(`data: ${JSON.stringify({ html: content })}\n\n`);
             } catch (error) {
                 console.error('Error rendering template:', error);
@@ -55,3 +58,5 @@ const createLiveReloadPlugin = (options: LiveReloadPluginOptions): Plugin => {
         },
     };
 };
+
+export { createLiveReloadPlugin, LiveReloadPluginOptions };
