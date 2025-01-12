@@ -1,8 +1,8 @@
-import { enhanceResponse, renderTemplate } from './nodeHttpRouter.js';
+import { enhanceResponse, renderTemplate } from './nodeHttpRouter';
 import { watch } from 'fs';
 const createLiveReloadPlugin = (options) => {
     return {
-        name: 'liveReload',
+        name: options.pluginName,
         handler: async (req, res, params, query, body) => {
             if (req.method === 'GET' && req.url === options.templatePage) {
                 const enhancedRes = enhanceResponse(res);
@@ -45,3 +45,4 @@ const createLiveReloadPlugin = (options) => {
         },
     };
 };
+export { createLiveReloadPlugin };

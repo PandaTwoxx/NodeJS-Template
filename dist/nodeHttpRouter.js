@@ -279,7 +279,7 @@ class Router {
         const results = [];
         testCases.forEach(testCase => {
             try {
-                const matchResult = this.matchRoute(testCase.method, testCase.path);
+                const matchResult = this.matchRoute(testCase.method, testCase.path) || this.matchStreamingRoute(testCase.method, testCase.path);
                 const passed = testCase.expectedMatch
                     ? matchResult !== null
                     : matchResult === null;
