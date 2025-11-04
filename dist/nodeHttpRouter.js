@@ -1,384 +1,359 @@
-import { readFile } from "node:fs/promises";
-import * as http from "node:http";
-import { join, resolve, dirname } from "node:path";
-import { parse as parseQueryString } from "node:querystring";
-import { URL, fileURLToPath } from "node:url";
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { lookup as mimeLookup } from 'mime-types';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-// Template rendering utility
-async function renderTemplate(templatePath, context = {}) {
-    try {
-        // Read template file from templates directory
-        const fullPath = join(process.cwd(), "templates", templatePath);
-        let template = await readFile(fullPath, "utf-8");
-        // Use Function constructor for safe template interpolation
-        const templateFunction = new Function(...Object.keys(context), `return \`${template}\`;`);
-        // Apply context values to template
-        return templateFunction(...Object.values(context));
-    }
-    catch (error) {
-        console.error("Template rendering error:", error);
-        throw new Error(`Failed to render template: ${templatePath}`);
-    }
-}
-// Body parsing utility (unchanged from previous version)
-async function parseBody(req) {
-    return new Promise((resolve, reject) => {
-        let body = "";
-        req.on("data", chunk => {
-            body += chunk.toString();
-        });
-        req.on("end", () => {
-            try {
-                const contentType = req.headers["content-type"] || "";
-                if (contentType.includes("application/x-www-form-urlencoded")) {
-                    resolve(parseQueryString(body));
-                }
-                else if (contentType.includes("application/json")) {
-                    resolve(JSON.parse(body));
-                }
-                else {
-                    resolve({});
-                }
-            }
-            catch (error) {
-                reject(error);
-            }
-        });
-    });
-}
+import * as http from 'node:http';
+import * as url from 'node:url';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+// You will need to install this package: npm install mime-types
+import * as mime from 'mime-types';
+// --- 2. Utility Functions ---
+/**
+ * Extends the standard ServerResponse with redirect and renderTemplate methods.
+ */
 function enhanceResponse(res) {
     const enhancedRes = res;
-    enhancedRes.redirect = (url, statusCode = 302) => {
-        enhancedRes.writeHead(statusCode, { Location: url });
+    enhancedRes.redirect = (redirectUrl, statusCode = 302) => {
+        enhancedRes.writeHead(statusCode, { 'Location': redirectUrl });
         enhancedRes.end();
     };
     enhancedRes.renderTemplate = async (templatePath, context = {}) => {
         try {
-            const content = await renderTemplate(templatePath, context);
-            enhancedRes.setHeader("Content-Type", "text/html");
+            const fullPath = path.join(process.cwd(), 'templates', templatePath);
+            let content = await renderTemplate(fullPath, context);
+            enhancedRes.setHeader('Content-Type', 'text/html');
+            enhancedRes.writeHead(200);
             enhancedRes.end(content);
         }
         catch (error) {
-            enhancedRes.statusCode = 500;
-            enhancedRes.end("Template rendering error");
+            console.error('Template rendering error:', error);
+            enhancedRes.writeHead(500);
+            enhancedRes.end('Template rendering failed.');
         }
     };
     return enhancedRes;
 }
 /**
- * Reads the contents of a file at the given path.
- *
- * @param filePath - The path to the file to read.
- * @returns The contents of the file as a string, or undefined if the file does not exist.
+ * Asynchronously reads a template file and performs simple context substitution.
+ */
+async function renderTemplate(templatePath, context) {
+    const templateContent = await fs.promises.readFile(templatePath, 'utf8');
+    // Simple substitution: replaces {{key}} with context[key]
+    return templateContent.replace(/{{(\w+)}}/g, (match, key) => {
+        return context.hasOwnProperty(key) ? String(context[key]) : match;
+    });
+}
+/**
+ * Asynchronously parses the request body based on Content-Type.
+ */
+async function parseBody(req) {
+    const contentType = req.headers['content-type'] || '';
+    if (!contentType.includes('application/x-www-form-urlencoded') && !contentType.includes('application/json')) {
+        return {};
+    }
+    return new Promise((resolve, reject) => {
+        let rawData = '';
+        req.on('data', chunk => {
+            rawData += chunk;
+        });
+        req.on('end', () => {
+            try {
+                if (contentType.includes('application/json')) {
+                    resolve(JSON.parse(rawData));
+                }
+                else if (contentType.includes('application/x-www-form-urlencoded')) {
+                    const parsed = new url.URLSearchParams(rawData);
+                    const body = {};
+                    parsed.forEach((val, key) => body[key] = val);
+                    resolve(body);
+                }
+                else {
+                    resolve({});
+                }
+            }
+            catch (e) {
+                console.error('Body parsing error:', e);
+                resolve({}); // Resolve with empty body on error
+            }
+        });
+        req.on('error', reject);
+    });
+}
+/**
+ * Reads the contents of a file. Used mainly for static file serving.
  */
 function pullFile(filePath) {
-    const absolutePath = resolve(__dirname, filePath);
-    if (!existsSync(absolutePath)) {
-        return undefined;
-    }
     try {
-        return readFileSync(absolutePath, 'utf-8');
+        const fileContent = fs.readFileSync(filePath);
+        const mimeType = mime.lookup(filePath) || 'application/octet-stream';
+        return { content: fileContent, mimeType };
     }
-    catch (error) {
-        console.error(`Failed to read file at ${absolutePath}: ${error}`);
+    catch (e) {
         return undefined;
     }
 }
-class Router {
+// --- 3. Router Class ---
+export class Router {
     constructor() {
         this.routes = [];
-        this.streamingRoutes = []; // New array for streaming routes
         this.globalPlugins = [];
     }
-    // Add a global plugin
+    /**
+     * Registers a global plugin (middleware).
+     */
     addGlobalPlugin(plugin) {
         this.globalPlugins.push(plugin);
     }
-    // Enhanced addRoute with support for custom plugins and handler override
-    addRoute(methods, // Accept single method or array of methods
-    path, handler, customPlugins = [], // Add custom plugins per route
-    redirectTo) {
-        const normalizedMethods = Array.isArray(methods) ? methods.map(m => m.toUpperCase()) : [methods.toUpperCase()];
-        const wrappedHandler = async (req, res, params, query, body) => {
-            const enhancedRes = res;
-            // Run global plugins
-            for (const plugin of this.globalPlugins) {
-                const result = await plugin.handler(req, enhancedRes, params, query, body);
-                if (result === false)
-                    return; // Halt the request if the plugin returns false
-                if (typeof result === 'function')
-                    handler = result; // Override handler if plugin provides a new one
-            }
-            // Run custom plugins
-            for (const plugin of customPlugins) {
-                const result = await plugin.handler(req, enhancedRes, params, query, body);
-                if (result === false)
-                    return; // Halt the request if the plugin returns false
-                if (typeof result === 'function')
-                    handler = result; // Override handler if plugin provides a new one
-            }
-            // Run the final (possibly overridden) route handler
-            await handler(req, enhancedRes, params, query, body);
-            // Optional redirection
-            if (redirectTo) {
-                enhancedRes.redirect(redirectTo);
-            }
-        };
-        this.routes.push({ methods: normalizedMethods, path, handler: wrappedHandler });
-    }
     /**
-     * Adds a route for streaming data to the client with plugin support.
-     * @param method The HTTP method for the route (typically 'GET').
-     * @param path The URL path for the route.
-     * @param handler The function that will handle the streaming logic.
-     * @param customPlugins Optional array of plugins for this route.
+     * Internal helper to create the regex and param names for a route path.
      */
-    addStreamRoute(method, path, handler, customPlugins = []) {
-        const normalizedMethod = method.toUpperCase();
-        const wrappedHandler = async (req, res, params, query) => {
-            const enhancedRes = res;
-            // Run global plugins
-            for (const plugin of this.globalPlugins) {
-                const result = await plugin.handler(req, enhancedRes, params, query, undefined); // Body is undefined for streaming
-                if (result === false)
-                    return; // Halt the request if the plugin returns false
-                if (typeof result === 'function')
-                    handler = result; // Override handler if plugin provides a new one
-            }
-            // Run custom plugins
-            for (const plugin of customPlugins) {
-                const result = await plugin.handler(req, enhancedRes, params, query, undefined); // Body is undefined for streaming
-                if (result === false)
-                    return; // Halt the request if the plugin returns false
-                if (typeof result === 'function')
-                    handler = result; // Override handler if plugin provides a new one
-            }
-            // Run the final (possibly overridden) route handler
-            handler(req, res, params, query);
-        };
-        this.streamingRoutes.push({ method: normalizedMethod, path, handler: wrappedHandler });
+    static parseRoutePath(pathStr) {
+        const paramNames = [];
+        let pathRegexStr = pathStr.replace(/([\\/])/g, '\\$&'); // Escape slashes
+        // Replace :param with a regex capture group and record the param name
+        pathRegexStr = pathRegexStr.replace(/:(\w+)/g, (match, name) => {
+            paramNames.push(name);
+            return '([^/]+)'; // Non-slash characters for a segment
+        });
+        // Handle trailing slash sensitivity and exact match
+        pathRegexStr = `^${pathRegexStr}$`;
+        return { pathRegex: new RegExp(pathRegexStr), paramNames };
     }
     /**
-     * Adds routes for serving static files from a directory.
-     *
-     * @param directoryPath - The path to the directory to serve.
+     * Registers a new route.
+     */
+    addRoute(methods, path, handler, customPlugins = [], redirectTo) {
+        const methodArray = Array.isArray(methods) ? methods.map(m => m.toUpperCase()) : [methods.toUpperCase()];
+        const { pathRegex, paramNames } = Router.parseRoutePath(path);
+        this.routes.push({
+            methods: methodArray,
+            path,
+            handler,
+            plugins: customPlugins,
+            redirectTo,
+            pathRegex,
+            paramNames,
+        });
+    }
+    /**
+     * Adds routes to serve static files from the specified directory.
      */
     addDirectory(directoryPath) {
-        const absoluteDirPath = resolve(__dirname, directoryPath);
-        if (!existsSync(absoluteDirPath) || !statSync(absoluteDirPath).isDirectory()) {
-            console.error(`Error: Directory not found at ${absoluteDirPath}`);
+        const fullDir = path.resolve(directoryPath);
+        if (!fs.existsSync(fullDir)) {
+            console.error(`[Router] Cannot serve directory: ${fullDir} not found.`);
             return;
         }
-        const traverseDirectory = (currentPath, routePrefix) => {
-            const files = readdirSync(currentPath);
-            for (const file of files) {
-                const absoluteFilePath = join(currentPath, file);
-                const relativePath = absoluteFilePath.substring(absoluteDirPath.length);
-                const routePath = join(routePrefix, relativePath).replace(/\\/g, '/'); // Normalize path for URLs
-                if (statSync(absoluteFilePath).isDirectory()) {
-                    traverseDirectory(absoluteFilePath, routePrefix);
-                }
-                else {
-                    this.addRoute('GET', routePath, (req, res) => {
-                        const enhancedRes = res;
-                        const contentType = mimeLookup(file) || 'application/octet-stream';
-                        if (pullFile(join(directoryPath, relativePath))) {
-                            enhancedRes.setHeader('Content-Type', contentType);
-                            enhancedRes.end(pullFile(join(directoryPath, relativePath)));
-                        }
-                        else {
-                            enhancedRes.statusCode = 404;
-                            enhancedRes.end('Not Found');
-                        }
-                    });
-                }
+        const serveHandler = (req, res, params, query, body) => {
+            // req.url is the full path including the directory name
+            const fileUrlPath = url.parse(req.url || '').pathname || '';
+            const filePath = path.join(process.cwd(), fileUrlPath);
+            const fileData = pullFile(filePath);
+            if (fileData) {
+                res.setHeader('Content-Type', fileData.mimeType);
+                res.writeHead(200);
+                res.end(fileData.content);
+            }
+            else {
+                res.writeHead(404);
+                res.end('File Not Found');
             }
         };
-        traverseDirectory(absoluteDirPath, `/${directoryPath}`);
+        // The path for static files is the directory name + all subpaths
+        // e.g., if directoryPath is 'public', path will be '/public/:filePath*'
+        const urlSegment = path.basename(directoryPath);
+        const staticPath = `/${urlSegment}/:filePath*`; // Using a simple catch-all for params
+        this.addRoute('GET', staticPath, serveHandler);
     }
-    // Match route (unchanged from your original code)
-    matchRoute(method, url) {
-        const normalizedMethod = method.toUpperCase();
+    /**
+     * Attempts to find a matching route for the given HTTP method and URL path.
+     */
+    matchRoute(method, requestPath) {
+        const methodUpper = method.toUpperCase();
         for (const route of this.routes) {
-            const paramNames = [];
-            const regexPath = route.path.replace(/:[^\s/]+/g, (match) => {
-                paramNames.push(match.slice(1));
-                return "([^/]+)";
-            });
-            const regex = new RegExp(`^${regexPath}$`);
-            const match = url.match(regex);
-            if (match && route.methods.includes(normalizedMethod)) { // Check if method is in the allowed methods
-                const params = {};
-                paramNames.forEach((name, index) => {
-                    params[name] = match[index + 1];
-                });
-                return { handler: route.handler, params };
+            if (route.methods.includes(methodUpper)) {
+                const match = requestPath.match(route.pathRegex);
+                if (match) {
+                    const params = {};
+                    // match[0] is the full string, so parameters start at index 1
+                    route.paramNames.forEach((name, index) => {
+                        // Note: This simple impl doesn't handle splat (*) well, but captures standard params
+                        params[name] = match[index + 1] || '';
+                    });
+                    return {
+                        handler: route.handler,
+                        params,
+                        plugins: route.plugins,
+                        redirectTo: route.redirectTo,
+                    };
+                }
             }
         }
         return null;
     }
-    // Match streaming route
-    matchStreamingRoute(method, url) {
-        const normalizedMethod = method.toUpperCase();
-        for (const route of this.streamingRoutes) {
-            const paramNames = [];
-            const regexPath = route.path.replace(/:[^\s/]+/g, (match) => {
-                paramNames.push(match.slice(1));
-                return "([^/]+)";
-            });
-            const regex = new RegExp(`^${regexPath}$`);
-            const match = url.match(regex);
-            if (match && route.method === normalizedMethod) {
-                const params = {};
-                paramNames.forEach((name, index) => {
-                    params[name] = match[index + 1];
-                });
-                return { handler: route.handler, params };
-            }
-        }
-        return null;
-    }
-    handleRequest(req, res) {
+    /**
+     * The main request handling logic.
+     */
+    async handleRequest(req, res) {
+        const reqUrl = req.url || '/';
+        const parsedUrl = url.parse(reqUrl, true);
+        const requestPath = parsedUrl.pathname || '/';
+        const requestMethod = req.method || 'GET';
         const enhancedRes = enhanceResponse(res);
-        const url = new URL(req.url || "", `http://${req.headers.host}`);
-        const method = req.method || "";
-        const pathname = url.pathname;
-        const routeMatch = this.matchRoute(method, pathname);
-        const streamMatch = this.matchStreamingRoute(method, pathname);
-        if (routeMatch) {
-            const query = Object.fromEntries(url.searchParams.entries());
-            parseBody(req)
-                .then((body) => routeMatch.handler(req, enhancedRes, routeMatch.params, query, body))
-                .catch((error) => {
-                enhancedRes.statusCode = 500;
-                enhancedRes.end("Internal Server Error");
-                console.error("Request handling error:", error);
-            });
+        const query = parsedUrl.query;
+        const match = this.matchRoute(requestMethod, requestPath);
+        const body = await parseBody(req);
+        const params = match?.params || {};
+        if (!match) {
+            enhancedRes.writeHead(404);
+            enhancedRes.end('Not Found');
+            return;
         }
-        else if (streamMatch) {
-            // Handle streaming route
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            streamMatch.handler(req, res, streamMatch.params, Object.fromEntries(url.searchParams.entries()));
+        let currentHandler = match.handler;
+        let plugins = [...this.globalPlugins, ...match.plugins];
+        // Execute Plugins
+        for (const plugin of plugins) {
+            const result = await plugin.handler(req, enhancedRes, params, query, body);
+            if (result === false) {
+                // Halt request processing
+                return;
+            }
+            else if (typeof result === 'function') {
+                // Override the route handler
+                currentHandler = result;
+            }
+            // If result is true, proceed
         }
-        else {
-            enhancedRes.statusCode = 404;
-            enhancedRes.end("Not Found");
+        // Execute final handler
+        currentHandler(req, enhancedRes, params, query, body);
+        // Handle redirection after execution (if specified in route config)
+        if (match.redirectTo) {
+            enhancedRes.redirect(match.redirectTo);
         }
     }
     /**
-     * Run a comprehensive test suite for route matching
-     * @param testCases Array of test cases to run
-     * @returns Detailed test results
+     * Executes a series of test cases.
      */
     runTests(testCases) {
         const results = [];
-        testCases.forEach(testCase => {
-            try {
-                const matchResult = this.matchRoute(testCase.method, testCase.path) || this.matchStreamingRoute(testCase.method, testCase.path);
-                const passed = testCase.expectedMatch
-                    ? matchResult !== null
-                    : matchResult === null;
-                const result = {
-                    name: testCase.name,
-                    passed: passed,
-                };
-                // Additional checks for parameter matching if expected
-                if (passed && testCase.expectedParams && matchResult) {
-                    const paramKeys = Object.keys(testCase.expectedParams);
-                    const allParamsMatch = paramKeys.every(key => matchResult.params[key] === testCase.expectedParams?.[key]);
-                    if (!allParamsMatch) {
-                        result.passed = false;
-                        result.message = `Parameter mismatch. Expected: ${JSON.stringify(testCase.expectedParams)}, Got: ${JSON.stringify(matchResult.params)}`;
-                    }
-                }
-                // Add detailed message for failed tests
-                if (!result.passed) {
-                    result.message = result.message || `Route match failed for ${testCase.path}`;
-                }
-                results.push(result);
+        for (const test of testCases) {
+            const result = { name: test.name, passed: false };
+            const match = this.matchRoute(test.method, test.path);
+            const matched = !!match;
+            if (matched !== test.expectedMatch) {
+                result.message = `Expected match: ${test.expectedMatch}, Actual: ${matched}`;
             }
-            catch (error) {
-                results.push({
-                    name: testCase.name,
-                    passed: false,
-                    message: `Test error: ${error instanceof Error ? error.message : String(error)}`,
-                });
+            else if (matched && test.expectedMatch) {
+                // Check parameters
+                const actualParams = match?.params || {};
+                const expectedParams = test.expectedParams || {};
+                const keysMatch = Object.keys(actualParams).length === Object.keys(expectedParams).length &&
+                    Object.keys(expectedParams).every(key => actualParams[key] === expectedParams[key]);
+                if (!keysMatch) {
+                    result.message = `Parameter mismatch. Expected: ${JSON.stringify(expectedParams)}, Actual: ${JSON.stringify(actualParams)}`;
+                }
+                else {
+                    result.passed = true;
+                }
             }
-        });
+            else {
+                result.passed = true; // Expected no match and got no match
+            }
+            results.push(result);
+        }
         return results;
     }
     /**
-     * Utility method to print test results with color and formatting
-     * @param results Test results to print
+     * Prints the results of the test suite.
      */
     printTestResults(results) {
-        console.log("\n🧪 Router Test Results:");
-        console.log("--------------------");
-        let passedCount = 0;
-        let failedCount = 0;
-        results.forEach(result => {
+        let passed = 0;
+        let failed = 0;
+        console.log('\n--- Route Test Results ---');
+        for (const result of results) {
             if (result.passed) {
-                console.log(`✅ ${result.name}: PASSED`);
-                passedCount++;
+                console.log(`✅ PASS: ${result.name}`);
+                passed++;
             }
             else {
-                console.log(`❌ ${result.name}: FAILED`);
-                console.log(`   ${result.message || "Unknown failure"}`);
-                failedCount++;
+                console.log(`❌ FAIL: ${result.name} - ${result.message}`);
+                failed++;
             }
-        });
-        console.log("\nSummary:");
-        console.log(`Total Tests: ${results.length}`);
-        console.log(`Passed: ${passedCount}`);
-        console.log(`Failed: ${failedCount}`);
-        return {
-            totalTests: results.length,
-            passed: passedCount,
-            failed: failedCount,
-        };
+        }
+        console.log('--------------------------');
+        console.log(`Total: ${results.length}, Passed: ${passed}, Failed: ${failed}`);
+        return { totalTests: results.length, passed, failed };
     }
     /**
-     * Returns an HTTP server configured with the router.
-     * @returns {http.Server} The configured HTTP server.
+     * Creates and returns a configured http.Server instance.
      */
     createServer() {
         return http.createServer(async (req, res) => {
-            const enhancedRes = enhanceResponse(res); // Enhance the response object
-            const url = new URL(req.url || "", `http://${req.headers.host}`);
-            const method = req.method || "";
-            const pathname = url.pathname;
-            const routeMatch = this.matchRoute(method, pathname);
-            const streamMatch = this.matchStreamingRoute(method, pathname);
-            if (routeMatch) {
-                const query = Object.fromEntries(url.searchParams.entries());
-                try {
-                    const body = await parseBody(req);
-                    await routeMatch.handler(req, enhancedRes, routeMatch.params, query, body);
-                }
-                catch (error) {
-                    console.error("Handler error:", error);
-                    enhancedRes.statusCode = 500;
-                    enhancedRes.end("Internal Server Error");
-                }
-            }
-            else if (streamMatch) {
-                // Handle streaming route
-                res.setHeader('Content-Type', 'text/event-stream');
-                res.setHeader('Cache-Control', 'no-cache');
-                res.setHeader('Connection', 'keep-alive');
-                streamMatch.handler(req, res, streamMatch.params, Object.fromEntries(url.searchParams.entries()));
-            }
-            else {
-                enhancedRes.statusCode = 404;
-                enhancedRes.end("Not Found");
-            }
+            // Use this.handleRequest as the listener
+            await this.handleRequest(req, res);
         });
     }
 }
-// Export server creation function
-export { Router, renderTemplate, enhanceResponse, parseBody };
+// --- 4. Example Usage ---
+/**
+ * Example usage is commented out but shows how to set up the server.
+ * To run this example:
+ * 1. Save the code as Router.ts
+ * 2. Run: npm install typescript ts-node @types/node mime-types
+ * 3. Add a 'templates' directory with a 'welcome.html' file (e.g., <h1>Hello, {{name}}!</h1>)
+ * 4. Run: ts-node Router.ts
+ */
+/*
+const router = new Router();
+
+// 1. Logger Plugin
+const loggerPlugin: Plugin = {
+  name: 'logger',
+  handler: async (req, res) => {
+    console.log(`[Plugin] Incoming: ${req.method} ${req.url}`);
+    return true; // Proceed
+  },
+};
+router.addGlobalPlugin(loggerPlugin);
+
+// 2. Add Routes
+router.addRoute('GET', '/', (req, res) => {
+  res.end('Welcome!');
+});
+
+router.addRoute('GET', '/users/:id', (req, res, params) => {
+  res.end(`Viewing user ID: ${params.id}. Query: ${JSON.stringify(req.url)}`);
+});
+
+router.addRoute('POST', '/data', async (req, res, params, query, body) => {
+  res.writeHead(201, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ message: 'Data received', body }));
+});
+
+router.addRoute('GET', '/redirect-test', (req, res) => {
+  res.end('Will be redirected!');
+}, [], '/');
+
+router.addRoute('GET', '/template', async (req, res) => {
+  await res.renderTemplate('welcome.html', { name: 'Router User' });
+});
+
+// 3. Serve Static Directory (requires a 'public' folder)
+// fs.mkdirSync('public', { recursive: true });
+// fs.writeFileSync('public/style.css', 'body { color: blue; }');
+// router.addDirectory('public'); // This will serve files at /public/...
+
+// 4. Run Tests
+const testCases: TestCase[] = [
+  { name: 'Home GET', method: 'GET', path: '/', expectedMatch: true },
+  { name: 'User GET with params', method: 'GET', path: '/users/99', expectedMatch: true, expectedParams: { id: '99' } },
+  { name: 'Data POST', method: 'POST', path: '/data', expectedMatch: true },
+  { name: 'Unknown GET', method: 'GET', path: '/nowhere', expectedMatch: false },
+];
+const results = router.runTests(testCases);
+router.printTestResults(results);
+
+// 5. Start Server
+const server = router.createServer();
+const PORT = 3000;
+server.listen(PORT, () => {
+  console.log('Server listening on port 3000');
+});
+*/ 

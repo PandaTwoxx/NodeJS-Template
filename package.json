@@ -1,35 +1,11 @@
 {
-  "name": "nodejs-template",
-  "version": "1.0.0",
-  "description": "A node Router",
-  "main": "index.js",
-  "type": "module",
-  "scripts": {
-    "test": "test",
-    "start": "node dist/main.js"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/PandaTwoxx/NodeJS-Template.git"
-  },
-  "keywords": [
-    "node",
-    "router"
-  ],
-  "author": "Weston Gorczyca",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/PandaTwoxx/NodeJS-Template/issues"
-  },
-  "homepage": "https://github.com/PandaTwoxx/NodeJS-Template#readme",
-  "dependencies": {
-    "cookie-parser": "^1.4.7",
-    "mime-types": "^2.1.35",
-    "typescript": "^5.7.2"
-  },
   "devDependencies": {
-    "@types/cookie-parser": "^1.4.8",
-    "@types/mime-types": "^2.1.4",
-    "@types/node": "^22.10.1"
-  }
+    "@types/mime-types": "^3.0.1",
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "mime-types": "^3.0.1"
+  },
+  "type": "module"
 }
